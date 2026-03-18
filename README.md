@@ -14,25 +14,26 @@ One-click installers — no Node.js or terminal required.
 
 All releases: [github.com/Anil-matcha/Open-Higgsfield-AI/releases](https://github.com/Anil-matcha/Open-Higgsfield-AI/releases)
 
-### macOS Installation — "damaged and can't be opened" fix
+### macOS Installation Guide
 
-Because the app is not code-signed, macOS Gatekeeper will block it with a **"damaged and can't be opened"** message. This is expected — the file is fine. Fix it with one Terminal command:
+Because the app is not notarized by Apple, macOS Gatekeeper will block it on first launch. Follow these steps:
 
-**Step 1** — Open the DMG (it will mount even if the warning appears)
+**Step 1** — Mount the DMG and drag the app to `/Applications`
 
 **Step 2** — Open Terminal and run:
-```bash
-xattr -cr "/Volumes/Open Higgsfield AI/Open Higgsfield AI.app"
-```
-
-**Step 3** — Drag the app to `/Applications`, then open it normally.
-
-If you already copied it to Applications before running the command:
 ```bash
 xattr -cr "/Applications/Open Higgsfield AI.app"
 ```
 
-> Alternatively: after attempting to open, go to **System Settings → Privacy & Security** → scroll down → click **"Open Anyway"**.
+**Step 3** — Right-click the app in `/Applications` → click **Open** → click **Open** again on the dialog
+
+> You only need to do this once. After that, the app opens normally.
+
+**Alternative (no Terminal):**
+1. Try to open the app — macOS will block it
+2. Go to **System Settings → Privacy & Security**
+3. Scroll down to find _"Open Higgsfield AI was blocked"_
+4. Click **Open Anyway** → **Open**
 
 ### Windows Installation — SmartScreen warning fix
 
