@@ -21,54 +21,103 @@ export function analyzeRequest(input, history = []) {
     };
   }
 
-  // 2. If we have more context, generate a Cinematic Plan (Storyboard Cards)
-  const genre = low.includes("noir") ? "Noir" : low.includes("sci-fi") ? "Sci-Fi" : "Cinematic";
+  // 2. Generate a Professional Director Plan (Production Document)
+  const isEpic = low.includes("clash") || low.includes("battle") || low.includes("epic") || low.includes("war") || low.includes("vibrant");
+  const isDark = low.includes("noir") || low.includes("dark") || low.includes("gritty") || low.includes("night");
   
+  const genre = isDark ? "Noir" : isEpic ? "Epic Fantasy" : "Cinematic";
+  
+  // Derive Technical Language
+  const isAnamorphic = isEpic || low.includes("cinema") || low.includes("movie") || low.includes("wide");
+  const lensType = isAnamorphic ? "Classic Anamorphic" : "Premium Modern Prime";
+  
+  let lightingMood = "Cinematic naturalism with volumetric lighting";
+  if (isDark) lightingMood = "High-contrast Chiaroscuro with deep shadows and rim lighting";
+  if (isEpic) lightingMood = "Dynamic high-key lighting with atmospheric haze and lens flares";
+
+  const characters = handles.map(h => {
+    const handleClean = h.replace('@', '');
+    let visuals = `Consistent identity across shots, high-fidelity detail.`;
+    
+    // Enrich based on common character archetypes
+    if (handleClean.toLowerCase().includes('zeus')) visuals = "Powerful deity with a white lightning beard, wearing ancient silver robes with electrical arcs.";
+    if (handleClean.toLowerCase().includes('athena')) visuals = "Wise warrior goddess with golden armor, an owl-crest helmet, and a piercing gaze.";
+    if (handleClean.toLowerCase().includes('valkyrie')) visuals = "Ethereal winged warrior in chrome-plated armor, wielding a spear of pure light.";
+    if (handleClean.toLowerCase().includes('hacker')) visuals = "Cyberpunk specialist with glowing data-ports on temples, oversized tech-jacket, and holographic HUD eyewear.";
+    if (handleClean.toLowerCase().includes('samurai')) visuals = "Sleek carbon-fiber samurai armor with neon-red accents and a katana that glows blue.";
+
+    return {
+      handle: h,
+      role: "Lead",
+      visuals: visuals
+    };
+  });
+
+  const environment = {
+    description: `Dynamic setting based on "${input.replace(/@[a-zA-Z0-9-]+/g, '').trim()}"`,
+    blocking: "Characters positioned for maximum depth. Foreground elements used for framing."
+  };
+
+  const technical = {
+    lens: lensType,
+    lighting: lightingMood,
+    camera: "Modular 8K Digital",
+    format: isAnamorphic ? "2.39:1 (Anamorphic)" : "16:9 (Standard)"
+  };
+
   const clips = [
     {
       id: 1,
-      title: "Clip 1: The Hook",
-      prompt: `Establishing shot of ${input.replace(/@[a-zA-Z0-9-]+/g, '').trim()}${characterContext}, wide angle, cinematic lighting, ${genre} style.`,
-      camera: genre === "Noir" ? "Classic 16mm Film" : "Modular 8K Digital",
-      lens: "Premium Modern Prime",
+      title: "Shot 1: The Hook",
+      prompt: `Establishing wide shot, ${input.replace(/@[a-zA-Z0-9-]+/g, '').trim()}${characterContext}, cinematic lighting, ${genre} style.`,
+      camera: "Modular 8K Digital",
+      lens: lensType,
       focal: 24,
       aperture: "f/1.4",
-      duration: "10s",
-      rationale: "Sets the scale and mood of the track."
+      duration: "5s",
+      technique: "Crane down wide shot",
+      rationale: "Sets the scale and establishes the world."
     },
     {
       id: 2,
-      title: "Clip 2: The Energy",
-      prompt: `Medium close up following ${handles[0] || 'the subject'} through the scene, motion blur, energetic performance.`,
+      title: "Shot 2: The Energy",
+      prompt: `Medium close up tracking ${handles[0] || 'the subject'}, motion blur, energetic performance, intense focus.`,
       camera: "Full-Frame Cine Digital",
       lens: "Compact Anamorphic",
-      focal: 35,
+      focal: 50,
       aperture: "f/2.8",
-      duration: "15s",
-      rationale: "Focuses on the core interaction and rhythm."
+      duration: "5s",
+      technique: "Dolly in following subject",
+      rationale: "Focuses on the core interaction and character presence."
     },
     {
       id: 3,
-      title: "Clip 3: The Climax",
-      prompt: `Extreme close up on ${handles[1] || handles[0] || 'the subject'}, emotional resonance, shallow depth of field, vibrant colors.`,
+      title: "Shot 3: The Climax",
+      prompt: `Extreme close up, emotional resonance, shallow depth of field, vibrant colors, rack focus from background to ${handles[1] || handles[0] || 'the subject'}.`,
       camera: "Grand Format 70mm Film",
       lens: "Clinical Sharp Prime",
       focal: 85,
       aperture: "f/1.2",
       duration: "5s",
-      rationale: "Captures the peak character moment."
+      technique: "Whip pan to close-up",
+      rationale: "Captures the peak character moment with high impact."
     }
   ];
 
   return {
     role: "assistant",
-    type: "storyboard",
-    greeting: `I've integrated ${handles.length > 0 ? handles.join(" and ") : "your ideas"} into a 3-clip Cinematic Plan. Check the clip cards below:`,
-    clips: clips
+    type: "storyboard", // keeping as storyboard but enriching the payload
+    greeting: `Production Plan ready for "${input}". I've outlined the character sheets, floor plans, and a 3-shot cinematic sequence.`,
+    plan: {
+      characters,
+      environment,
+      technical,
+      clips
+    }
   };
 }
 
 export function generateStoryboard(idea) {
-  // Logic moved into analyzeRequest for better integration
   return [];
 }
+

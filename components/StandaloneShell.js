@@ -141,13 +141,50 @@ export default function StandaloneShell() {
 
       {/* ── MAIN WORKSPACE ── */}
       <div className="flex-1 flex flex-col relative overflow-hidden bg-[#050505]">
-        
-             
+        <header className="h-[72px] border-b border-white/5 flex items-center justify-between px-8 bg-[#080808]/50 backdrop-blur-md shrink-0 z-30">
+          <div className="flex items-center gap-8">
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-2 hover:bg-white/5 rounded-lg text-white/40 hover:text-white transition-all"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+            </button>
+            <nav className="flex items-center gap-2 bg-white/[0.02] p-1.5 rounded-2xl border border-white/5 shadow-inner">
+              {[
+                { id: 'image', name: 'Image', icon: '🖼️', color: 'from-blue-500/20 to-cyan-500/20' },
+                { id: 'video', name: 'Video', icon: '🎥', color: 'from-orange-500/20 to-red-500/20' },
+                { id: 'audio', name: 'Audio', icon: '🔊', color: 'from-pink-500/20 to-purple-500/20' },
+                { id: 'cinema', name: 'Cinema', icon: '🎬', color: 'from-[#93e8d3]/20 to-emerald-500/20' }
+              ].map(tab => (
+                <button 
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative px-5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2.5 overflow-hidden group ${activeTab === tab.id ? 'text-white shadow-lg' : 'text-white/40 hover:text-white/70'}`}
+                >
+                  {activeTab === tab.id && (
+                    <div className={`absolute inset-0 bg-gradient-to-tr ${tab.color} opacity-100 animate-pulse-slow`}></div>
+                  )}
+                  <span className={`text-sm transition-transform group-hover:scale-110 ${activeTab === tab.id ? 'scale-110' : ''}`}>{tab.icon}</span>
+                  <span className="relative z-10 uppercase tracking-widest">{tab.name}</span>
+                  {activeTab === tab.id && (
+                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#93e8d3] rounded-full shadow-[0_0_10px_#93e8d3]"></div>
+                  )}
+                </button>
+              ))}
+            </nav>
+          </div>
+          
+          <div className="flex items-center gap-4">
+             <div className="flex flex-col items-end mr-2">
+                <span className="text-[10px] font-black text-white/20 uppercase tracking-widest">Balance</span>
+                <span className="text-sm font-bold text-[#93e8d3]">{balance || 0} Credits</span>
+             </div>
              <button className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/60 hover:bg-white/10 hover:text-white transition-all shadow-sm">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
              </button>
           </div>
         </header>
+
 
         {/* ACTIVE STUDIO AREA */}
         <main className="flex-1 relative overflow-hidden flex bg-black">

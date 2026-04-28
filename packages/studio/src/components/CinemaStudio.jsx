@@ -478,7 +478,31 @@ function CameraControlsOverlay({
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Helper Components ───────────────────────────────────────────────────
+
+function QuickElementsMenu({ items, position, onSelect, onClose }) {
+  return (
+    <div 
+      className="absolute bg-[#1c1c1c] border border-white/10 rounded-xl shadow-2xl z-[100] w-48 overflow-hidden animate-fade-in-up"
+      style={{ bottom: position.bottom, right: position.right }}
+    >
+      <div className="p-2 border-b border-white/5 bg-white/5">
+        <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Suggested Elements</span>
+      </div>
+      <div className="max-h-48 overflow-y-auto custom-scrollbar">
+        {items.map((item, i) => (
+          <button 
+            key={i} 
+            onClick={() => onSelect(item)}
+            className="w-full text-left px-4 py-2 text-xs text-white/70 hover:bg-[#93e8d3] hover:text-black transition-colors border-b border-white/5 last:border-0"
+          >
+            @{item.replace(/\s+/g, '-').toLowerCase()}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function CinemaStudio({
   apiKey,
@@ -912,6 +936,51 @@ export default function CinemaStudio({
       textareaRef.current.value = "";
       textareaRef.current.style.height = "auto";
       setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  };
+
+  const handleGenerateCharacterSheet = async (char) => {
+    if (!apiKey) {
+      toast.error("Please add your API key first");
+      return;
+    }
+    
+    setIsGenerating(true);
+    const toastId = toast.loading(`Designing reference sheet for ${char.handle}...`);
+    
+    try {
+      const prompt = `Character design sheet of ${char.handle}, ${char.visuals}, detailed turnaround featuring: full body front view, side view, and back view. Consistent character features, uniform soft studio lighting, plain white background, sharp focus, professional concept art style, 8k resolution.`;
+      
+      const result = await generateImage(apiKey, {
+        model: "dalle-3", 
+        prompt: prompt,
+        aspect_ratio: "16:9"
+      });
+      
+      if (result.url) {
+        setElements(prev => {
+          const cleanHandle = char.handle.replace('@', '');
+          const existing = prev.find(e => e.handle === cleanHandle || e.name.toLowerCase() === cleanHandle.toLowerCase());
+          if (existing) {
+            return prev.map(e => e.id === existing.id ? { ...e, imageUrl: result.url, type: 'Character' } : e);
+          } else {
+            return [...prev, { 
+              id: Date.now().toString(), 
+              name: cleanHandle.charAt(0).toUpperCase() + cleanHandle.slice(1), 
+              handle: cleanHandle, 
+              imageUrl: result.url,
+              type: 'Character',
+              icon: '👤'
+            }];
+          }
+        });
+        toast.success(`Character sheet for ${char.handle} is ready!`, { id: toastId });
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to generate character sheet", { id: toastId });
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -1429,7 +1498,7 @@ export default function CinemaStudio({
           </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-5 custom-scrollbar flex flex-col gap-6">
+        <div className="flex-1 overflow-y-auto min-h-0 p-5 custom-scrollbar flex flex-col gap-6">
           {directorChat.length === 0 ? (
              <div className="text-center mt-10 flex flex-col items-center gap-4 px-6">
                 <div className="w-12 h-12 rounded-full bg-[#93e8d3]/10 flex items-center justify-center mb-2">
@@ -1460,7 +1529,7 @@ export default function CinemaStudio({
                   {msg.content}
                 </div>
               ) : (
-                <div key={idx} className="bg-white/5 border border-white/5 rounded-2xl rounded-tl-none p-5 text-sm text-white/80 shadow-lg relative overflow-hidden animate-fade-in">
+                <div key={idx} className="bg-white/5 border border-white/5 rounded-2xl rounded-tl-none p-5 text-sm text-white/80 shadow-lg relative animate-fade-in">
                   <div className="absolute top-0 left-0 w-1 h-full bg-[#93e8d3]"></div>
                   
                   {msg.type === "questions" && (
@@ -1481,16 +1550,79 @@ export default function CinemaStudio({
                   )}
 
                   {msg.type === "storyboard" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between mb-4">
-                        <span className="text-[10px] font-black text-[#93e8d3] uppercase tracking-widest">Cinematic Plan</span>
-                        <span className="text-[10px] font-bold text-white/20">Storyboarding</span>
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-black text-[#93e8d3] uppercase tracking-[0.2em]">Production Document</span>
+                        <span className="text-[10px] font-bold text-white/20">AI Director v3.5</span>
                       </div>
-                      <p className="text-white text-[11px] font-medium leading-relaxed mb-4">{msg.greeting}</p>
+                      <p className="text-white text-[11px] font-medium leading-relaxed italic opacity-80">{msg.greeting}</p>
                       
-                      <div className="flex flex-col gap-4">
-                        {msg.clips?.map((clip, i) => (
-                          <div key={i} className="bg-white/[0.03] border border-white/10 rounded-2xl p-4 flex flex-col gap-3 shadow-lg relative overflow-hidden animate-fade-in-up" style={{ animationDelay: `${i * 150}ms` }}>
+                      {/* Character Sheets */}
+                      {msg.plan?.characters && (
+                        <div className="space-y-3">
+                          <h4 className="text-[10px] font-black text-white/40 uppercase tracking-widest border-b border-white/5 pb-1">Character Sheets</h4>
+                          <div className="grid grid-cols-2 gap-2">
+                            {msg.plan.characters.map((char, i) => (
+                              <div key={i} className="bg-white/[0.03] border border-white/5 rounded-xl p-3 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded bg-purple-500/20 flex items-center justify-center text-[10px] font-bold text-purple-400">@</div>
+                                    <span className="text-[11px] font-bold text-white">{char.handle}</span>
+                                  </div>
+                                  <button 
+                                    onClick={() => handleGenerateCharacterSheet(char)}
+                                    className="px-2 py-1 bg-white/5 hover:bg-white/10 rounded text-[8px] font-black uppercase text-[#93e8d3] transition-all border border-white/5"
+                                  >
+                                    Generate Sheet
+                                  </button>
+                                </div>
+                                <p className="text-[9px] text-white/40 leading-tight">{char.visuals}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Environment & Blocking */}
+                      {msg.plan?.environment && (
+                        <div className="space-y-3">
+                          <h4 className="text-[10px] font-black text-white/40 uppercase tracking-widest border-b border-white/5 pb-1">Set Design & Blocking</h4>
+                          <div className="bg-white/[0.03] border border-white/5 rounded-xl p-3 space-y-2">
+                            <p className="text-[10px] text-white/80 leading-relaxed"><strong className="text-[#93e8d3]">World:</strong> {msg.plan.environment.description}</p>
+                            <div className="flex items-start gap-2 bg-black/20 p-2 rounded-lg border border-white/5">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/30 mt-0.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                              <p className="text-[9px] text-white/50 italic">{msg.plan.environment.blocking}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Technical Specs */}
+                      {msg.plan?.technical && (
+                        <div className="space-y-3">
+                          <h4 className="text-[10px] font-black text-white/40 uppercase tracking-widest border-b border-white/5 pb-1">Optics & Lighting</h4>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-white/[0.03] border border-white/5 rounded-xl p-3">
+                              <span className="text-[8px] font-black text-white/20 uppercase block mb-1">Primary Lens</span>
+                              <span className="text-[10px] font-bold text-[#93e8d3]">{msg.plan.technical.lens}</span>
+                            </div>
+                            <div className="bg-white/[0.03] border border-white/5 rounded-xl p-3">
+                              <span className="text-[8px] font-black text-white/20 uppercase block mb-1">Format</span>
+                              <span className="text-[10px] font-bold text-white">{msg.plan.technical.format}</span>
+                            </div>
+                            <div className="col-span-2 bg-white/[0.03] border border-white/5 rounded-xl p-3">
+                              <span className="text-[8px] font-black text-white/20 uppercase block mb-1">Lighting Strategy</span>
+                              <p className="text-[9px] text-white/60">{msg.plan.technical.lighting}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Storyboard Clips */}
+                      <div className="space-y-4">
+                        <h4 className="text-[10px] font-black text-white/40 uppercase tracking-widest border-b border-white/5 pb-1">Cinematic Sequence</h4>
+                        {(msg.plan?.clips || msg.clips)?.map((clip, i) => (
+                          <div key={i} className="bg-white/[0.03] border border-white/10 rounded-2xl p-4 flex flex-col gap-3 shadow-lg relative animate-fade-in-up" style={{ animationDelay: `${i * 150}ms` }}>
                              <div className="absolute top-0 left-0 w-1 h-full bg-[#93e8d3]"></div>
                              <div className="flex items-center justify-between">
                                <span className="text-[10px] font-black text-white uppercase tracking-widest">{clip.title}</span>
@@ -1500,6 +1632,9 @@ export default function CinemaStudio({
                              <p className="text-[11px] text-white font-medium leading-relaxed mb-1">{clip.prompt}</p>
                              
                              <div className="flex flex-wrap gap-1.5">
+                               {clip.technique && (
+                                 <span className="text-[9px] bg-purple-500/10 px-2 py-0.5 rounded text-purple-300 border border-purple-500/20 font-bold uppercase tracking-tighter">{clip.technique}</span>
+                               )}
                                <span className="text-[9px] bg-black/40 px-2 py-0.5 rounded text-white/50 border border-white/5">{clip.camera}</span>
                                <span className="text-[9px] bg-black/40 px-2 py-0.5 rounded text-white/50 border border-white/5">{clip.focal}mm</span>
                              </div>
@@ -1517,12 +1652,22 @@ export default function CinemaStudio({
                                    }));
                                    toast.success(`${clip.title} applied to Studio!`);
                                  }}
-                                 className="flex-1 py-2 bg-[#93e8d3] text-black text-[10px] font-black uppercase rounded-lg hover:bg-[#a6fae4] transition-all"
+                                 className="flex-1 py-2 bg-[#93e8d3] text-black text-[10px] font-black uppercase rounded-lg hover:bg-[#a6fae4] transition-all shadow-lg shadow-[#93e8d3]/10"
                                >
-                                 Apply Changes
+                                 Apply to Studio
                                </button>
-                               <button className="px-3 py-2 bg-white/5 text-white/40 text-[10px] font-bold rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/5">
-                                  Details
+                               <button 
+                                 onClick={() => {
+                                    setDirectorShots(prev => {
+                                       const newId = Date.now();
+                                       return [...prev, { id: newId, prompt: clip.prompt, status: "idle", url: null }];
+                                    });
+                                    setIsDirectorMode(true);
+                                    toast.success("Added to Director Timeline!");
+                                 }}
+                                 className="px-3 py-2 bg-white/5 text-white/40 text-[10px] font-bold rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/5"
+                               >
+                                  + Timeline
                                </button>
                              </div>
                           </div>
@@ -1530,6 +1675,7 @@ export default function CinemaStudio({
                       </div>
                     </div>
                   )}
+
                 </div>
               )
             ))
@@ -1543,13 +1689,16 @@ export default function CinemaStudio({
              onSubmit={(e) => {
                e.preventDefault();
                if (!directorInput.trim()) return;
+               console.log("Director Input:", directorInput);
                const plan = analyzeRequest(directorInput);
+               console.log("Generated Plan:", plan);
                setDirectorChat(prev => [...prev, 
                  { role: "user", content: directorInput }, 
                  { role: "assistant", ...plan, content: directorInput }
                ]);
                setDirectorInput("");
              }}
+
            >
               <input 
                 type="text"
