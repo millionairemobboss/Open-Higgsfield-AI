@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { generateImage } from "../muapi.js";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { generateImage, generateVideo, uploadFile, processLipSync } from "../muapi.js";
+import { analyzeRequest, generateStoryboard } from "../directorBrain.js";
+import { toast } from "react-hot-toast";
 
 // ─── Constants (inlined from promptUtils) ───────────────────────────────────
 
@@ -73,6 +75,13 @@ const CAMERAS = Object.keys(CAMERA_MAP);
 const LENSES = Object.keys(LENS_MAP);
 const FOCAL_LENGTHS = Object.keys(FOCAL_PERSPECTIVE).map((k) => parseInt(k));
 const APERTURES = Object.keys(APERTURE_EFFECT);
+
+const ELEMENTS_MOCK = [
+  { id: 1, name: "Tazz (Mob Boss)", handle: "mob-boss", icon: "🕴️" },
+  { id: 2, name: "Ragan", handle: "ragan", icon: "👩" },
+  { id: 3, name: "Pink Watch", handle: "pink-watch", icon: "⌚" },
+  { id: 4, name: "Neon Skyline", handle: "neon-skyline", icon: "🏙️" }
+];
 
 function buildNanoBananaPrompt(
   basePrompt,
@@ -406,21 +415,31 @@ function CameraControlsOverlay({
               Select hardware & optics
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="w-10 h-10 rounded-full bg-white/[0.03] border border-white/[0.05] flex items-center justify-center text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => {
+                 onSettingsChange(prev => ({
+                   ...prev,
+                   camera: CAMERAS[Math.floor(Math.random() * CAMERAS.length)],
+                   lens: LENSES[Math.floor(Math.random() * LENSES.length)],
+                   focal: FOCAL_LENGTHS[Math.floor(Math.random() * FOCAL_LENGTHS.length)],
+                   aperture: APERTURES[Math.floor(Math.random() * APERTURES.length)]
+                 }));
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 rounded-xl text-xs font-bold text-purple-300 hover:bg-purple-500/30 transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)]"
             >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2l3 6 6 3-6 3-3 6-3-6-6-3 6-3 3-6z" strokeLinejoin="round" strokeLinecap="round"/></svg>
+              Auto-Generate Settings
+            </button>
+            <button
+              onClick={onClose}
+              className="w-10 h-10 rounded-full bg-white/[0.03] border border-white/[0.05] flex items-center justify-center text-white/40 hover:text-white hover:bg-white/[0.06] transition-all"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Scroll columns */}
@@ -477,7 +496,8 @@ export default function CinemaStudio({
     focal: 35,
     aperture: "f/1.4",
   });
-  const [resolution, setResolution] = useState("2K");
+  const [resolution, setResolution] = useState("1080p");
+  const [duration, setDuration] = useState("5s");
 
   // ── UI state ──
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
@@ -485,14 +505,41 @@ export default function CinemaStudio({
   const [canvasUrl, setCanvasUrl] = useState(null); // null = prompt view
   const [fullscreenUrl, setFullscreenUrl] = useState(null);
   const [activeHistoryIndex, setactiveHistoryIndex] = useState(null);
+  
+  const [elements, setElements] = useState([
+    { id: '1', name: 'Zeus', type: 'Character', image: null },
+    { id: '2', name: 'Athena', type: 'Character', image: null },
+    { id: '3', name: 'Cyberpunk Hacker', type: 'Character', image: null },
+    { id: '4', name: 'Street Samurai', type: 'Character', image: null }
+  ]);
+  const [isUploadingElement, setIsUploadingElement] = useState(false);
+  const [selectedModel, setSelectedModel] = useState("Cinema Studio 3.5");
+  const [isAiDirectorOpen, setIsAiDirectorOpen] = useState(false);
+  const [isElementsModalOpen, setIsElementsModalOpen] = useState(false);
+  const [elementsModalTab, setElementsModalTab] = useState("Elements");
+  const [elementsFilter, setElementsFilter] = useState("All");
+  const [directorInput, setDirectorInput] = useState("");
+  const [showDirectorElements, setShowDirectorElements] = useState(false);
+  const [directorChat, setDirectorChat] = useState([]);
+  const [showElements, setShowElements] = useState(false);
+  
+  // ── Director Mode State ──
+  const [isDirectorMode, setIsDirectorMode] = useState(false);
+  const [directorShots, setDirectorShots] = useState([
+    { id: 1, prompt: "", status: "idle", url: null }
+  ]);
+  const [activeShotId, setActiveShotId] = useState(1);
 
   // ── Internal history state (used when historyItems prop is not provided) ──
   const [internalHistory, setInternalHistory] = useState([]);
 
-  // ── Dropdown state ──
-  const [openDropdown, setOpenDropdown] = useState(null); // 'ar' | 'res' | null
-  const arBtnRef = useRef(null);
-  const resBtnRef = useRef(null);
+  const [openDropdown, setOpenDropdown] = useState(null); // 'ar' | 'res' | 'motion' | 'duration' | null
+  const [motion, setMotion] = useState("Auto");
+  
+  // ── Audio State ──
+  const [audioFileUrl, setAudioFileUrl] = useState(null);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const audioInputRef = useRef(null);
 
   // ── Textarea auto-grow ──
   const textareaRef = useRef(null);
@@ -541,16 +588,134 @@ export default function CinemaStudio({
   const formatSummaryValue = () =>
     `${settings.lens}, ${settings.focal}mm, ${settings.aperture}`;
 
-  // ── Textarea auto-height ──
+  // ── Textarea auto-height & Elements Trigger ──
   const handleTextareaInput = (e) => {
     const el = e.target;
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
-    setSettings((prev) => ({ ...prev, prompt: el.value }));
+    
+    const val = el.value;
+    setSettings((prev) => ({ ...prev, prompt: val }));
+
+    // Detect if user typed '@' as the last character or after a space
+    if (val.endsWith('@') || val.endsWith(' @')) {
+      setShowElements(true);
+    } else if (showElements && !val.includes('@')) {
+      setShowElements(false);
+    }
+  };
+
+  const handleElementSelect = (el) => {
+    setSettings(prev => {
+      const currentPrompt = prev.prompt || "";
+      const newPrompt = currentPrompt.endsWith('@') 
+        ? currentPrompt.replace(/@$/, `@${el.handle} `)
+        : currentPrompt + (currentPrompt && !currentPrompt.endsWith(' ') ? ' ' : '') + `@${el.handle} `;
+      return { ...prev, prompt: newPrompt };
+    });
+    
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
   };
 
   // ── Generate ──
   const handleGenerate = useCallback(async () => {
+    if (isDirectorMode) {
+      // Director Mode: generate all idle shots
+      const idleShots = directorShots.filter(s => !s.url && s.prompt.trim());
+      if (idleShots.length === 0) return alert("No valid shots to generate. Add prompts to your shots.");
+      
+      setIsGenerating(true);
+      try {
+        const newShots = [...directorShots];
+        for (const shot of idleShots) {
+          // Find if the shot prompt contains any uploaded character elements
+          let referenceImageUrls = [];
+          for (const el of elements) {
+            if (shot.prompt.includes(`@${el.handle}`) && el.imageUrls && el.imageUrls.length > 0) {
+              referenceImageUrls = el.imageUrls;
+              break;
+            } else if (shot.prompt.includes(`@${el.handle}`) && el.imageUrl) {
+              referenceImageUrls = [el.imageUrl];
+              break;
+            }
+          }
+          const primaryImageUrl = referenceImageUrls.length > 0 ? referenceImageUrls[0] : null;
+
+          let actualModelId = "kling-v3.0-std-motion-control";
+          const lowerModel = selectedModel.toLowerCase();
+          if (lowerModel.includes("kling 3.0")) actualModelId = "kling-v3.0-std-motion-control";
+          else if (lowerModel.includes("seedance 2.0") && !lowerModel.includes("omni")) actualModelId = "seedance-v2.0-t2v";
+          else if (lowerModel.includes("seedance omni")) actualModelId = "seedance-omni-t2v";
+          else if (lowerModel.includes("kling 2.5")) actualModelId = "kling-v2.5-std-motion-control";
+
+          if (primaryImageUrl && lowerModel.includes("seedance")) {
+            actualModelId = "seedance-omni-t2v";
+          }
+
+          // Omni requires an image payload. If not provided, fallback safely
+          if (actualModelId === "seedance-omni-t2v" && !primaryImageUrl) {
+            actualModelId = "seedance-v2.0-t2v";
+          }
+
+          const payload = {
+            model: actualModelId,
+            prompt: shot.prompt,
+            aspect_ratio: settings.aspect_ratio,
+            resolution: resolution.toLowerCase(),
+            duration: parseInt(duration, 10),
+          };
+          
+          if (motion !== "Auto") {
+            payload.camera_control = motion.toLowerCase();
+          }
+
+          if (primaryImageUrl) {
+            payload.image_url = primaryImageUrl;
+            if (referenceImageUrls.length > 1) payload.image_urls = referenceImageUrls;
+          }
+
+          // Update status to processing
+          setDirectorShots(prev => prev.map(s => s.id === shot.id ? { ...s, status: "processing" } : s));
+
+          const res = await generateVideo(apiKey, payload);
+          if (res && res.url) {
+            setDirectorShots(prev => prev.map(s => s.id === shot.id ? { ...s, status: "completed", url: res.url } : s));
+            
+            // Add to gallery history
+            const entry = {
+              url: res.url,
+              timestamp: Date.now(),
+              settings: {
+                prompt: shot.prompt,
+                camera: settings.camera,
+                lens: settings.lens,
+                focal: settings.focal,
+                aperture: settings.aperture,
+                aspect_ratio: settings.aspect_ratio,
+                resolution,
+                motion
+              },
+            };
+            if (historyItems == null) {
+              setInternalHistory((prev) => [entry, ...prev].slice(0, 50));
+            }
+            setCanvasUrl(res.url); // Preview the latest finished shot
+          } else {
+            setDirectorShots(prev => prev.map(s => s.id === shot.id ? { ...s, status: "failed" } : s));
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Director Mode Generation Failed.");
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
+    // Single Shot Mode
     const basePrompt = settings.prompt.trim();
     if (!basePrompt || isGenerating) return;
 
@@ -564,18 +729,84 @@ export default function CinemaStudio({
       settings.aperture,
     );
 
+    // Find if the prompt contains any uploaded character elements
+    let referenceImageUrls = [];
+    for (const el of elements) {
+      if (basePrompt.includes(`@${el.handle}`) && el.imageUrls && el.imageUrls.length > 0) {
+        referenceImageUrls = el.imageUrls;
+        break; // take the first matched character for now
+      } else if (basePrompt.includes(`@${el.handle}`) && el.imageUrl) {
+        referenceImageUrls = [el.imageUrl]; // backwards compatibility
+        break;
+      }
+    }
+    const primaryImageUrl = referenceImageUrls.length > 0 ? referenceImageUrls[0] : null;
+
     try {
-      const res = await generateImage(apiKey, {
-        model: "nano-banana-pro",
+      // Map the UI model name to a valid muapi model ID
+      let actualModelId = "kling-v3.0-std-motion-control"; // default fallback
+      const lowerModel = selectedModel.toLowerCase();
+      if (lowerModel.includes("kling 3.0")) actualModelId = "kling-v3.0-std-motion-control";
+      else if (lowerModel.includes("seedance 2.0") && !lowerModel.includes("omni")) actualModelId = "seedance-v2.0-t2v";
+      else if (lowerModel.includes("seedance omni")) actualModelId = "seedance-omni-t2v";
+      else if (lowerModel.includes("kling 2.5")) actualModelId = "kling-v2.5-std-motion-control";
+
+      // If we have an image reference, auto-switch to Omni if using Seedance
+      if (primaryImageUrl && lowerModel.includes("seedance")) {
+         actualModelId = "seedance-omni-t2v";
+      }
+
+      // Omni requires an image payload. If not provided, fallback safely to prevent 422 error
+      if (actualModelId === "seedance-omni-t2v" && !primaryImageUrl) {
+         console.warn("Seedance Omni requires a character reference. Falling back to Seedance 2.0 Text-to-Video.");
+         actualModelId = "seedance-v2.0-t2v";
+      }
+
+      const payload = {
+        model: actualModelId,
         prompt: finalPrompt,
         aspect_ratio: settings.aspect_ratio,
         resolution: resolution.toLowerCase(),
-        negative_prompt: "blurry, low quality, distortion, bad composition",
-      });
+        duration: parseInt(duration, 10),
+      };
+      
+      if (motion !== "Auto") {
+        payload.camera_control = motion.toLowerCase();
+      }
+
+      // Pass multiple images if available (some models use image_url, some use image_list/images)
+      if (primaryImageUrl) {
+        payload.image_url = primaryImageUrl;
+        if (referenceImageUrls.length > 1) {
+          payload.image_urls = referenceImageUrls; // Send the full array for VIP/Advanced models
+        }
+      }
+
+      const res = await generateVideo(apiKey, payload);
 
       if (res && res.url) {
+        let finalUrl = res.url;
+
+        // ── Lip Sync Pipeline ──
+        if (audioFileUrl) {
+           setIsGenerating(true);
+           try {
+              const lipSyncRes = await processLipSync(apiKey, {
+                model: "sync-1.6.0",
+                video_url: res.url,
+                audio_url: audioFileUrl
+              });
+              if (lipSyncRes && lipSyncRes.url) {
+                 finalUrl = lipSyncRes.url;
+              }
+           } catch (lipErr) {
+              console.error("Lip Sync failed:", lipErr);
+              alert("Video generated, but Lip Sync failed.");
+           }
+        }
+
         const entry = {
-          url: res.url,
+          url: finalUrl,
           timestamp: Date.now(),
           settings: {
             prompt: basePrompt,
@@ -585,6 +816,8 @@ export default function CinemaStudio({
             aperture: settings.aperture,
             aspect_ratio: settings.aspect_ratio,
             resolution,
+            motion,
+            audioUrl: audioFileUrl
           },
         };
 
@@ -593,7 +826,7 @@ export default function CinemaStudio({
           setInternalHistory((prev) => [entry, ...prev].slice(0, 50));
         }
 
-        setCanvasUrl(res.url);
+        setCanvasUrl(finalUrl);
 
         if (onGenerationComplete) {
           onGenerationComplete({
@@ -682,6 +915,38 @@ export default function CinemaStudio({
     }
   };
 
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    setIsUploadingElement(true);
+    try {
+      // Upload all selected files concurrently
+      const uploadedUrls = await Promise.all(
+        files.map(file => uploadFile(apiKey, file, (p) => console.log(p)))
+      );
+      
+      const name = prompt(`Enter character name for these ${files.length} photos:`, "My Character") || "New Element";
+      const handle = name.toLowerCase().replace(/[^a-z0-9]/g, "-");
+      
+      const newElement = {
+        id: Date.now(),
+        name,
+        handle,
+        icon: "🖼️",
+        imageUrl: uploadedUrls[0], // primary
+        imageUrls: uploadedUrls // full set for multi-angle/identity lock
+      };
+      
+      setElements(prev => [...prev, newElement]);
+    } catch (err) {
+      console.error("Upload failed", err);
+      alert("Failed to upload reference images.");
+    } finally {
+      setIsUploadingElement(false);
+      e.target.value = null; // reset input
+    }
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="w-full h-full flex flex-col items-center justify-center bg-black relative overflow-hidden">
@@ -693,13 +958,16 @@ export default function CinemaStudio({
             {history.map((entry, idx) => (
               <div
                 key={entry.timestamp ?? idx}
-                className="relative group rounded-2xl overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-xl hover:border-[#d9ff00]/50 transition-all duration-300 flex flex-col cursor-pointer"
+                className="relative group rounded-2xl overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-xl hover:border-[#a855f7]/50 transition-all duration-300 flex flex-col cursor-pointer"
                 onClick={() => loadHistoryItem(entry, idx)}
               >
-                <img
+                <video
                   src={entry.url}
-                  alt={`History item ${idx + 1}`}
                   className="w-full aspect-[4/3] object-cover bg-black/40"
+                  autoPlay 
+                  loop 
+                  muted 
+                  playsInline
                 />
                 
                 {/* Overlay actions */}
@@ -711,7 +979,7 @@ export default function CinemaStudio({
                       e.stopPropagation();
                       setFullscreenUrl(entry.url);
                     }}
-                    className="p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-[#d9ff00] hover:text-black transition-all border border-white/10"
+                    className="p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-[#a855f7] hover:text-black transition-all border border-white/10"
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <polyline points="15 3 21 3 21 9" />
@@ -740,7 +1008,7 @@ export default function CinemaStudio({
                         window.open(entry.url, "_blank");
                       }
                     }}
-                    className="p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-[#d9ff00] hover:text-black transition-all border border-white/10"
+                    className="p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-[#a855f7] hover:text-black transition-all border border-white/10"
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
@@ -754,7 +1022,7 @@ export default function CinemaStudio({
                     {entry.settings?.prompt || "No prompt"}
                   </p>
                   <div className="flex items-center justify-between mt-1 flex-wrap gap-1">
-                    <span className="text-[10px] font-bold text-[#d9ff00] px-2 py-0.5 bg-[#d9ff00]/10 rounded border border-[#d9ff00]/20">
+                    <span className="text-[10px] font-bold text-[#a855f7] px-2 py-0.5 bg-[#a855f7]/10 rounded border border-[#a855f7]/20">
                       {entry.settings?.camera || "Standard"}
                     </span>
                     <div className="flex gap-2">
@@ -793,111 +1061,321 @@ export default function CinemaStudio({
         )}
       </div>
 
-      {/* ── BOTTOM PROMPT BAR ── */}
-      <div className="absolute bottom-4 left-4 right-4 md:left-0 md:right-0 md:mx-auto md:max-w-[95%] lg:max-w-4xl z-30 transition-all duration-700 animate-fade-in-up">
-        <div className="bg-[#0a0a0a]/80 backdrop-blur-3xl border border-white/10 rounded-md p-4 flex justify-between shadow-2xl items-end relative gap-2">
-          {/* Left Column */}
-          <div className="flex-1 flex flex-col gap-3 min-h-[80px] justify-between py-1">
-            {/* Input Row */}
-            <div className="flex items-start gap-4 w-full">
+      {/* ── BOTTOM PROMPT BAR (Higgsfield Style) ── */}
+      <div className="absolute bottom-4 left-4 right-4 md:left-0 md:right-0 md:mx-auto lg:max-w-4xl z-30 transition-all duration-700 animate-fade-in-up">
+        {/* Director Mode Timeline */}
+        {isDirectorMode && (
+          <div className="mb-2 bg-[#1c1c1c]/95 backdrop-blur-3xl border border-white/5 rounded-2xl p-2 shadow-2xl flex gap-2 overflow-x-auto custom-scrollbar">
+            {directorShots.map((shot, idx) => (
+              <div 
+                key={shot.id} 
+                onClick={() => {
+                  setActiveShotId(shot.id);
+                  setSettings(prev => ({ ...prev, prompt: shot.prompt }));
+                  if (shot.url) setCanvasUrl(shot.url);
+                }}
+                className={`relative shrink-0 w-32 h-20 rounded-xl overflow-hidden cursor-pointer border-2 transition-colors ${activeShotId === shot.id ? 'border-purple-500' : 'border-white/5 hover:border-white/20'}`}
+              >
+                {shot.url ? (
+                  <video src={shot.url} className="w-full h-full object-cover" autoPlay loop muted playsInline />
+                ) : (
+                  <div className="w-full h-full bg-white/5 flex items-center justify-center flex-col gap-1 text-white/40">
+                    {shot.status === 'processing' ? (
+                      <span className="animate-pulse text-xs text-purple-400">Processing...</span>
+                    ) : (
+                      <>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
+                        <span className="text-[10px] font-bold uppercase">Shot {idx + 1}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+                {/* Delete Shot Button */}
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDirectorShots(prev => prev.filter(s => s.id !== shot.id));
+                  }}
+                  className="absolute top-1 right-1 w-5 h-5 bg-black/80 rounded-full flex items-center justify-center text-white/50 hover:text-red-400 hover:bg-black"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            ))}
+            
+            {/* Add Shot Button */}
+            <button 
+              onClick={() => {
+                const newId = Date.now();
+                setDirectorShots(prev => [...prev, { id: newId, prompt: "", status: "idle", url: null }]);
+                setActiveShotId(newId);
+                setSettings(prev => ({ ...prev, prompt: "" }));
+              }}
+              className="shrink-0 w-32 h-20 rounded-xl border border-dashed border-white/20 hover:border-purple-500/50 hover:bg-purple-500/10 flex flex-col items-center justify-center text-white/40 hover:text-purple-400 transition-colors cursor-pointer"
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span className="text-[10px] font-bold uppercase mt-1">Add Shot</span>
+            </button>
+          </div>
+        )}
+
+        <div className="bg-[#1c1c1c]/95 backdrop-blur-3xl border border-white/5 rounded-2xl p-3 flex flex-col shadow-2xl relative gap-2">
+          
+          {/* Quick Elements Menu */}
+          {showElements && (
+            <div className="absolute bottom-full left-0 mb-2 w-64 bg-[#1a1a1a]/95 backdrop-blur-3xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-fade-in-up z-50">
+              <div className="p-3 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+                <span className="text-[10px] font-black text-white/40 uppercase tracking-widest">Select Element</span>
+                <button onClick={() => setShowElements(false)} className="text-white/20 hover:text-white"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+              </div>
+              <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                {elements.length === 0 ? (
+                  <div className="p-4 text-center text-white/20 text-xs italic">No elements found. Upload one!</div>
+                ) : (
+                  elements.map(el => (
+                    <button 
+                      key={el.id} 
+                      onClick={() => { handleElementSelect(el); setShowElements(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden shrink-0 group-hover:border-purple-500/50 transition-colors">
+                        {el.imageUrl ? <img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover" /> : <span>{el.icon}</span>}
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm font-bold text-white truncate">@{el.handle}</span>
+                        <span className="text-[9px] text-white/30 uppercase font-bold">{el.name}</span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+              <button 
+                onClick={() => { setIsElementsModalOpen(true); setShowElements(false); }}
+                className="w-full p-3 bg-white/[0.03] hover:bg-white/[0.08] text-[10px] font-bold text-purple-400 uppercase tracking-widest border-t border-white/5 transition-colors"
+              >
+                + Create / Manage Elements
+              </button>
+            </div>
+          )}
+
+          {/* Input Row */}
+          <div className="flex items-start gap-2 w-full relative">
+            <button 
+              className="w-12 h-12 shrink-0 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/60 transition-colors border border-white/5"
+              onClick={() => setIsElementsModalOpen(true)}
+              title="Add Elements & Assets"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <button 
+              className={`p-2.5 mt-0.5 rounded-full hover:bg-white/10 transition-colors shadow-sm ${audioFileUrl ? "bg-blue-500/20 text-blue-400" : "bg-white/5 text-white/60"}`}
+              title={isUploadingAudio ? "Uploading..." : "Add Dialogue / Lip-Sync Audio"}
+              onClick={() => audioInputRef.current?.click()}
+              disabled={isUploadingAudio}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <input 
+              type="file" 
+              accept="audio/*" 
+              className="hidden" 
+              ref={audioInputRef} 
+              onChange={async (e) => {
+                 const file = e.target.files[0];
+                 if (!file) return;
+                 setIsUploadingAudio(true);
+                 try {
+                   const url = await uploadFile(apiKey, file);
+                   setAudioFileUrl(url);
+                 } catch (err) {
+                   console.error("Audio upload failed", err);
+                   alert("Failed to upload audio file.");
+                 } finally {
+                   setIsUploadingAudio(false);
+                   e.target.value = null;
+                 }
+              }} 
+            />
+            
+            <div className="flex-1 flex flex-col relative">
+              {audioFileUrl && (
+                <div className="absolute -top-7 left-1 flex items-center gap-2 bg-blue-500/10 border border-blue-500/30 text-blue-400 text-[10px] px-2 py-0.5 rounded-full z-10">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/></svg>
+                  Dialogue Attached
+                  <button onClick={() => setAudioFileUrl(null)} className="hover:text-red-400 ml-1"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
-                placeholder="Describe your cinema scene..."
-                className="w-full bg-transparent border-none text-white text-sm placeholder:text-white/10 focus:outline-none resize-none pt-1 leading-relaxed min-h-[40px] max-h-[150px] md:max-h-[250px] overflow-y-auto custom-scrollbar disabled:opacity-40"
-                rows={1}
-                onInput={handleTextareaInput}
-              />
+              placeholder={isDirectorMode ? "Describe this shot - use @ to add characters" : "Describe your scene - use @ to add characters & locations"}
+              className="w-full bg-transparent border-none text-white text-sm placeholder:text-white/30 focus:outline-none resize-none pt-2.5 leading-relaxed min-h-[44px] max-h-[150px] overflow-y-auto custom-scrollbar disabled:opacity-40"
+              rows={1}
+              value={settings.prompt}
+              onInput={(e) => {
+                handleTextareaInput(e);
+                if (isDirectorMode) {
+                  setDirectorShots(prev => prev.map(s => s.id === activeShotId ? { ...s, prompt: e.target.value } : s));
+                }
+              }}
+            />
             </div>
-            <div className="flex justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Aspect Ratio Button */}
-                <div className="relative">
-                  <button
-                    ref={arBtnRef}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-white/[0.03] hover:bg-white/10 text-xs font-bold text-white/40 hover:text-white transition-colors rounded-md border border-white/[0.03]"
-                    onClick={() =>
-                      setOpenDropdown((d) => (d === "ar" ? null : "ar"))
-                    }
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="opacity-40">
-                      <rect x="2" y="7" width="20" height="10" rx="2" ry="2" />
-                    </svg>
-                    {settings.aspect_ratio}
-                  </button>
-                  {openDropdown === "ar" && (
-                    <Dropdown
-                      items={ASPECT_RATIOS}
-                      selected={settings.aspect_ratio}
-                      onSelect={(val) =>
-                        setSettings((prev) => ({ ...prev, aspect_ratio: val }))
-                      }
-                      triggerRef={arBtnRef}
-                      onClose={() => setOpenDropdown(null)}
-                    />
-                  )}
-                </div>
+            {/* Generate Button */}
+            <button
+              className="h-[44px] px-6 bg-[#93e8d3] text-black rounded-xl font-bold text-sm hover:bg-[#a6fae4] transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(147,232,211,0.2)] disabled:opacity-50 min-w-[140px] tracking-wide"
+              disabled={isGenerating || (isDirectorMode ? directorShots.every(s => !s.prompt.trim()) : !settings.prompt.trim())}
+              onClick={handleGenerate}
+            >
+              {isGenerating ? (
+                <span className="animate-pulse">{isDirectorMode ? "SHOOTING..." : "GENERATING..."}</span>
+              ) : (
+                <>{isDirectorMode ? "SHOOT SCENE 🎬" : "GENERATE ✨"}</>
+              )}
+            </button>
+          </div>
 
-                {/* Resolution Button */}
-                <div className="relative">
-                  <button
-                    ref={resBtnRef}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-white/[0.03] hover:bg-white/10 text-xs font-bold text-white/40 hover:text-white transition-colors rounded-md border border-white/[0.03]"
-                    onClick={() =>
-                      setOpenDropdown((d) => (d === "res" ? null : "res"))
-                    }
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="opacity-40">
-                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                    </svg>
-                    {resolution}
-                  </button>
-                  {openDropdown === "res" && (
-                    <Dropdown
-                      items={RESOLUTIONS}
-                      selected={resolution}
-                      onSelect={setResolution}
-                      triggerRef={resBtnRef}
-                      onClose={() => setOpenDropdown(null)}
-                    />
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-3 h-full self-end mb-1">
-                {/* Summary Card (triggers overlay) */}
-                <button
-                  className="flex flex-col items-start justify-center px-4 py-1.5 bg-white/[0.03] rounded-md border border-white/[0.03] hover:border-white/20 transition-all text-left flex-1 min-w-[100px] md:min-w-[160px] max-w-[240px] h-[50px] relative group overflow-hidden"
-                  onClick={() => setIsOverlayOpen(true)}
-                >
-                  <div className="absolute top-3 right-3 w-1.5 h-1.5 bg-[#d9ff00] rounded-full shadow-lg shadow-[#d9ff00]/20" />
-                  <span className="text-[9px] font-bold text-white/30 uppercase truncate w-full tracking-wider group-hover:text-white transition-colors">
-                    {settings.camera}
-                  </span>
-                  <span className="text-xs font-semibold text-white/70 truncate w-full group-hover:text-[#d9ff00] transition-colors">
-                    {formatSummaryValue()}
-                  </span>
-                </button>
+          {/* Controls Row */}
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/5 flex-wrap">
+             {/* Model Selector Dropdown */}
+             <div className="relative">
+               <button 
+                 onClick={() => setOpenDropdown(openDropdown === 'model' ? null : 'model')}
+                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors"
+               >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                  {selectedModel}
+               </button>
+               {openDropdown === 'model' && (
+                 <div className="absolute bottom-full left-0 mb-2 w-48 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 z-50">
+                   {["Kling 3.0", "Kling 2.5", "Seedance 2.0", "Seedance Omni"].map(model => (
+                     <button key={model} onClick={() => { setSelectedModel(model); setOpenDropdown(null); }} className={`w-full text-left px-4 py-2 text-xs hover:bg-white/5 ${selectedModel === model ? 'text-purple-400' : 'text-white'}`}>
+                       {model}
+                     </button>
+                   ))}
+                 </div>
+               )}
+             </div>
+             
+             {/* Duration Dropdown */}
+             <div className="relative">
+               <button 
+                 onClick={() => setOpenDropdown(openDropdown === 'duration' ? null : 'duration')}
+                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors"
+               >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  {duration}
+               </button>
+               {openDropdown === 'duration' && (
+                 <div className="absolute bottom-full left-0 mb-2 w-24 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 z-50">
+                   {["5s", "10s", "15s"].map(d => (
+                     <button key={d} onClick={() => { setDuration(d); setOpenDropdown(null); }} className={`w-full text-left px-4 py-2 text-xs hover:bg-white/5 ${duration === d ? 'text-purple-400' : 'text-white'}`}>
+                       {d}
+                     </button>
+                   ))}
+                 </div>
+               )}
+             </div>
 
-                {/* Generate Button */}
-                <button
-                  className="h-[50px] px-8 bg-[#d9ff00] text-black rounded-md font-medium text-sm hover:bg-[#e5ff33] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#d9ff00]/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={isGenerating || !settings.prompt.trim()}
-                  onClick={handleGenerate}
-                >
-                  {isGenerating ? (
-                    <>
-                      <span className="animate-spin inline-block text-black">◌</span> SHOOTING...
-                    </>
-                  ) : (
-                    <>
-                      <span>SHOOT</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>  
+             {/* Resolution Dropdown */}
+             <div className="relative">
+               <button 
+                 onClick={() => setOpenDropdown(openDropdown === 'res' ? null : 'res')}
+                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors"
+               >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  {resolution}
+               </button>
+               {openDropdown === 'res' && (
+                 <div className="absolute bottom-full left-0 mb-2 w-32 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 z-50">
+                   {["720p", "1080p", "2K", "4K"].map(res => (
+                     <button key={res} onClick={() => { setResolution(res); setOpenDropdown(null); }} className={`w-full text-left px-4 py-2 text-xs hover:bg-white/5 ${resolution === res ? 'text-purple-400' : 'text-white'}`}>
+                       {res}
+                     </button>
+                   ))}
+                 </div>
+               )}
+             </div>
+
+             {/* AR Dropdown */}
+             <div className="relative">
+               <button 
+                 onClick={() => setOpenDropdown(openDropdown === 'ar' ? null : 'ar')}
+                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors"
+               >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="6" width="16" height="12" rx="2"/></svg>
+                  {settings.aspect_ratio}
+               </button>
+               {openDropdown === 'ar' && (
+                 <div className="absolute bottom-full left-0 mb-2 w-32 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 z-50">
+                   {ASPECT_RATIOS.map(ar => (
+                     <button key={ar} onClick={() => { setSettings(prev => ({ ...prev, aspect_ratio: ar })); setOpenDropdown(null); }} className={`w-full text-left px-4 py-2 text-xs hover:bg-white/5 ${settings.aspect_ratio === ar ? 'text-purple-400' : 'text-white'}`}>
+                       {ar}
+                     </button>
+                   ))}
+                 </div>
+               )}
+             </div>
+
+             {/* Motion Dropdown */}
+             <div className="relative">
+               <button 
+                 onClick={() => setOpenDropdown(openDropdown === 'motion' ? null : 'motion')}
+                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors"
+               >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M16 12l-4-4-4 4M12 8v8"/></svg>
+                  {motion}
+               </button>
+               {openDropdown === 'motion' && (
+                 <div className="absolute bottom-full left-0 mb-2 w-36 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 z-50">
+                   {["Auto", "Pan Left", "Pan Right", "Tilt Up", "Tilt Down", "Zoom In", "Zoom Out", "Dolly In", "Dolly Out"].map(m => (
+                     <button key={m} onClick={() => { setMotion(m); setOpenDropdown(null); }} className={`w-full text-left px-4 py-2 text-xs hover:bg-white/5 ${motion === m ? 'text-purple-400' : 'text-white'}`}>
+                       {m}
+                     </button>
+                   ))}
+                 </div>
+               )}
+             </div>
+
+             {/* Config Button (Replaces static Variants) */}
+             <button 
+                onClick={() => setIsOverlayOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-[#a855f7] transition-colors"
+             >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                Optics
+             </button>
+
+              {/* Director Mode Toggle */}
+              <button 
+                onClick={() => setIsDirectorMode(!isDirectorMode)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isDirectorMode ? 'bg-purple-500/20 text-purple-400' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
+              >
+                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+                 Director Mode
+              </button>
+
+             {/* @ Button */}
+             <button 
+               onClick={() => setShowElements(!showElements)}
+               className={`ml-auto flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${showElements ? 'bg-white/20 text-white' : 'bg-white/5 hover:bg-white/10 text-white/80'}`}
+             >
+                <span className="font-bold text-sm">@</span>
+             </button>
+          </div>
         </div>
       </div>
+
+      {/* ── FULLSCREEN VIDEO MODAL ── */}
+      {fullscreenUrl && (
+        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex items-center justify-center animate-fade-in" onClick={() => setFullscreenUrl(null)}>
+          <button 
+            className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all z-50"
+            onClick={(e) => { e.stopPropagation(); setFullscreenUrl(null); }}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+          <video src={fullscreenUrl} className="max-w-[90vw] max-h-[90vh] object-contain rounded-xl shadow-2xl border border-white/10" autoPlay loop controls playsInline onClick={e => e.stopPropagation()} />
+        </div>
+      )}
 
       {/* ── Camera Controls Overlay ── */}
       <CameraControlsOverlay
@@ -906,6 +1384,323 @@ export default function CinemaStudio({
         settings={settings}
         onSettingsChange={setSettings}
       />
+
+      {/* ── AI DIRECTOR FLOATING TOGGLE ── */}
+      <div className={`fixed top-1/2 right-0 -translate-y-1/2 z-40 transition-all ${isAiDirectorOpen ? 'translate-x-full opacity-0 pointer-events-none' : 'translate-x-0 opacity-100'} group flex items-center`}>
+         {/* Hover Tooltip / Quick Actions */}
+         <div className="absolute right-full pr-4 flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none group-hover:pointer-events-auto hidden md:flex items-end">
+            {["Pick a camera", "Set up my look", "Write my prompt"].map(chip => (
+               <button 
+                 key={chip} 
+                 onClick={() => {
+                   setIsAiDirectorOpen(true);
+                   setDirectorChat(prev => [...prev, { role: "user", content: chip }, { role: "assistant", type: "mockup" }]);
+                 }}
+                 className="px-4 py-2 bg-[#1a1a1a]/95 backdrop-blur-xl border border-white/10 rounded-xl text-xs font-bold text-[#93e8d3] whitespace-nowrap shadow-2xl hover:bg-white/5 transition-all"
+               >
+                 {chip}
+               </button>
+            ))}
+         </div>
+
+         <button 
+           onClick={() => setIsAiDirectorOpen(!isAiDirectorOpen)}
+           className="bg-[#1c1c1c]/90 backdrop-blur-md border border-white/10 border-r-0 rounded-l-xl p-3 flex flex-col items-center gap-2 shadow-2xl hover:bg-white/10 transition-all"
+         >
+           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#93e8d3" strokeWidth="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+           <span className="[writing-mode:vertical-lr] text-xs font-bold text-white/70 tracking-widest uppercase">AI Director</span>
+         </button>
+      </div>
+
+      {/* ── AI DIRECTOR SIDEBAR ── */}
+      <div className={`fixed top-[64px] right-0 bottom-0 w-[380px] bg-[#141414]/95 backdrop-blur-2xl border-l border-white/5 shadow-[0_0_50px_rgba(0,0,0,0.5)] z-50 transform transition-transform duration-500 flex flex-col ${isAiDirectorOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+        <div className="h-16 border-b border-white/5 flex items-center justify-between px-5 bg-gradient-to-r from-transparent to-white/[0.02]">
+          <div className="flex items-center gap-2">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#93e8d3" strokeWidth="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            <h3 className="font-bold text-white tracking-wide">AI Director</h3>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setDirectorChat([])} className="p-1.5 text-white/40 hover:text-white transition-colors" title="Clear Chat">
+               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <button onClick={() => setIsAiDirectorOpen(false)} className="p-1.5 text-white/40 hover:text-white transition-colors" title="Close">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-5 custom-scrollbar flex flex-col gap-6">
+          {directorChat.length === 0 ? (
+             <div className="text-center mt-10 flex flex-col items-center gap-4 px-6">
+                <div className="w-12 h-12 rounded-full bg-[#93e8d3]/10 flex items-center justify-center mb-2">
+                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#93e8d3" strokeWidth="1.5"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                </div>
+                <p className="text-white/40 text-sm italic leading-relaxed">
+                   I'm your AI Director. Try saying <strong className="text-white/60">"reference characters"</strong> and use <strong className="text-[#93e8d3]">@</strong> to tag them.
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center">
+                   {["reference characters", "make a music video", "gritty noir style"].map(chip => (
+                     <button 
+                       key={chip}
+                       onClick={() => {
+                         setDirectorInput(chip === "reference characters" ? chip + " @" : chip);
+                         if (chip === "reference characters") setShowDirectorElements(true);
+                       }}
+                       className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-full text-[10px] font-bold text-white/60 hover:bg-white/10 hover:text-white transition-all"
+                     >
+                       {chip}
+                     </button>
+                   ))}
+                </div>
+             </div>
+          ) : (
+            directorChat.map((msg, idx) => (
+              msg.role === "user" ? (
+                <div key={idx} className="self-end bg-white/10 rounded-2xl rounded-tr-none px-4 py-2.5 text-sm text-white max-w-[85%]">
+                  {msg.content}
+                </div>
+              ) : (
+                <div key={idx} className="bg-white/5 border border-white/5 rounded-2xl rounded-tl-none p-5 text-sm text-white/80 shadow-lg relative overflow-hidden animate-fade-in">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-[#93e8d3]"></div>
+                  
+                  {msg.type === "questions" && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-black text-[#93e8d3] uppercase tracking-widest">Assistant: Clarification</span>
+                        <span className="text-[10px] font-bold text-white/20">v3.5 Core</span>
+                      </div>
+                      <p className="text-white text-xs font-medium leading-relaxed">{msg.greeting}</p>
+                      <div className="flex flex-col gap-2">
+                        {msg.questions?.map((q, i) => (
+                          <div key={i} className="bg-white/[0.03] p-2.5 rounded-lg border border-white/5 text-[10px] text-white/60 italic">
+                             {q}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {msg.type === "storyboard" && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-4">
+                        <span className="text-[10px] font-black text-[#93e8d3] uppercase tracking-widest">Cinematic Plan</span>
+                        <span className="text-[10px] font-bold text-white/20">Storyboarding</span>
+                      </div>
+                      <p className="text-white text-[11px] font-medium leading-relaxed mb-4">{msg.greeting}</p>
+                      
+                      <div className="flex flex-col gap-4">
+                        {msg.clips?.map((clip, i) => (
+                          <div key={i} className="bg-white/[0.03] border border-white/10 rounded-2xl p-4 flex flex-col gap-3 shadow-lg relative overflow-hidden animate-fade-in-up" style={{ animationDelay: `${i * 150}ms` }}>
+                             <div className="absolute top-0 left-0 w-1 h-full bg-[#93e8d3]"></div>
+                             <div className="flex items-center justify-between">
+                               <span className="text-[10px] font-black text-white uppercase tracking-widest">{clip.title}</span>
+                               <span className="text-[10px] font-bold text-[#93e8d3]">{clip.duration}</span>
+                             </div>
+                             
+                             <p className="text-[11px] text-white font-medium leading-relaxed mb-1">{clip.prompt}</p>
+                             
+                             <div className="flex flex-wrap gap-1.5">
+                               <span className="text-[9px] bg-black/40 px-2 py-0.5 rounded text-white/50 border border-white/5">{clip.camera}</span>
+                               <span className="text-[9px] bg-black/40 px-2 py-0.5 rounded text-white/50 border border-white/5">{clip.focal}mm</span>
+                             </div>
+
+                             <div className="flex gap-2 mt-2 pt-3 border-t border-white/5">
+                               <button 
+                                 onClick={() => {
+                                   setSettings(prev => ({
+                                     ...prev,
+                                     prompt: clip.prompt,
+                                     camera: clip.camera,
+                                     lens: clip.lens,
+                                     focal: clip.focal,
+                                     aperture: clip.aperture
+                                   }));
+                                   toast.success(`${clip.title} applied to Studio!`);
+                                 }}
+                                 className="flex-1 py-2 bg-[#93e8d3] text-black text-[10px] font-black uppercase rounded-lg hover:bg-[#a6fae4] transition-all"
+                               >
+                                 Apply Changes
+                               </button>
+                               <button className="px-3 py-2 bg-white/5 text-white/40 text-[10px] font-bold rounded-lg hover:bg-white/10 hover:text-white transition-all border border-white/5">
+                                  Details
+                               </button>
+                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            ))
+          )}
+        </div>
+
+        {/* Input Area */}
+        <div className="p-4 border-t border-white/5 bg-[#141414]/90 backdrop-blur-md">
+           <form 
+             className="bg-[#1c1c1c] border border-white/10 rounded-xl flex items-end p-1.5 focus-within:border-white/20 transition-colors shadow-inner"
+             onSubmit={(e) => {
+               e.preventDefault();
+               if (!directorInput.trim()) return;
+               const plan = analyzeRequest(directorInput);
+               setDirectorChat(prev => [...prev, 
+                 { role: "user", content: directorInput }, 
+                 { role: "assistant", ...plan, content: directorInput }
+               ]);
+               setDirectorInput("");
+             }}
+           >
+              <input 
+                type="text"
+                placeholder="Ask the Director - use @ to add characters..." 
+                className="flex-1 bg-transparent border-none text-white text-sm focus:outline-none px-3 py-2.5" 
+                value={directorInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDirectorInput(val);
+                  if (val.endsWith('@') || val.endsWith(' @')) {
+                    setShowDirectorElements(true);
+                  } else if (showDirectorElements && !val.includes('@')) {
+                    setShowDirectorElements(false);
+                  }
+                }}
+              />
+              
+              {showDirectorElements && (
+                <QuickElementsMenu 
+                  items={elements.map(e => e.name)}
+                  position={{ bottom: 70, right: 20 }}
+                  onSelect={(name) => {
+                    setDirectorInput(prev => prev.slice(0, -1) + name + " ");
+                    setShowDirectorElements(false);
+                  }}
+                  onClose={() => setShowDirectorElements(false)}
+                />
+              )}
+              <button type="submit" className="p-2 m-1 bg-white/10 rounded-lg text-white hover:bg-white/20 hover:text-[#93e8d3] transition-colors self-end">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+              </button>
+           </form>
+        </div>
+      </div>
+
+      {/* ── HIGGSFIELD ELEMENTS MODAL ── */}
+      {isElementsModalOpen && (
+        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in" onClick={() => setIsElementsModalOpen(false)}>
+          <div className="w-full max-w-[1100px] h-[80vh] min-h-[600px] bg-[#141414] border border-white/10 rounded-3xl shadow-[0_0_80px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden relative" onClick={e => e.stopPropagation()}>
+             
+             {/* Header */}
+             <div className="h-16 border-b border-white/5 flex items-center px-6 gap-6 shrink-0 relative">
+               {["Uploads", "Image Generations", "Video Generations", "Elements", "Liked"].map(tab => (
+                 <button 
+                   key={tab} 
+                   onClick={() => setElementsModalTab(tab)}
+                   className={`h-full text-sm font-bold border-b-2 transition-colors relative top-[1px] ${elementsModalTab === tab ? 'border-white text-white' : 'border-transparent text-white/50 hover:text-white/80'}`}
+                 >
+                   {tab}
+                 </button>
+               ))}
+               <button onClick={() => setIsElementsModalOpen(false)} className="absolute right-6 p-2 text-white/50 hover:text-white transition-colors bg-white/5 rounded-full hover:bg-white/10">
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+               </button>
+             </div>
+
+             {/* Content Area */}
+             <div className="flex-1 overflow-hidden flex flex-col p-6 bg-[#0a0a0a]">
+                
+                {/* Sub Header for Elements tab */}
+                {elementsModalTab === "Elements" && (
+                  <div className="flex items-center justify-between mb-6 shrink-0">
+                    <div className="flex items-center gap-2">
+                       {["All", "Pinned", "Shared", "Characters", "Locations", "Props"].map(filter => (
+                         <button 
+                           key={filter} 
+                           onClick={() => setElementsFilter(filter)}
+                           className={`px-4 py-2 rounded-full text-xs font-semibold transition-all ${elementsFilter === filter ? 'bg-white/10 text-white' : 'text-white/40 hover:bg-white/5 hover:text-white/80'}`}
+                         >
+                           {filter === "Pinned" && <span className="mr-1.5">📌</span>}
+                           {filter === "Shared" && <span className="mr-1.5">👤</span>}
+                           {filter}
+                         </button>
+                       ))}
+                    </div>
+                    <div className="relative">
+                      <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                      <input type="text" placeholder="Search..." className="bg-white/5 border border-white/5 rounded-full pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-white/20 transition-colors w-48" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Uploads Tab */}
+                {elementsModalTab === "Uploads" && (
+                  <div className="flex flex-col items-center justify-center flex-1 gap-4">
+                    <label className="w-64 h-40 rounded-2xl border-2 border-dashed border-white/10 hover:border-white/30 bg-white/[0.02] hover:bg-white/[0.05] flex flex-col items-center justify-center cursor-pointer transition-all group">
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/30 group-hover:text-white mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      <span className="text-sm font-bold text-white/40 group-hover:text-white">Upload Files</span>
+                      <span className="text-xs text-white/20 mt-1">Images, Videos, Audio</span>
+                      <input type="file" accept="image/*,video/*,audio/*" multiple className="hidden" onChange={handleFileUpload} disabled={isUploadingElement || !apiKey} />
+                    </label>
+                    <p className="text-white/30 text-xs">Drag and drop or click to upload</p>
+                  </div>
+                )}
+
+                {/* Generations Tabs */}
+                {(elementsModalTab === "Image Generations" || elementsModalTab === "Video Generations") && (
+                  <div className="flex flex-col items-center justify-center flex-1 gap-4 text-white/30">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M10 8l6 4-6 4V8z"/></svg>
+                    <p className="text-sm">Your {elementsModalTab.toLowerCase()} will appear here</p>
+                  </div>
+                )}
+
+                {/* Liked Tab */}
+                {elementsModalTab === "Liked" && (
+                  <div className="flex flex-col items-center justify-center flex-1 gap-4 text-white/30">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    <p className="text-sm">Your liked items will appear here</p>
+                  </div>
+                )}
+
+                {/* Elements Grid */}
+                {elementsModalTab === "Elements" && (
+                  <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 pb-10">
+                       <label className="aspect-[4/3] rounded-2xl border-2 border-dashed border-white/10 hover:border-white/30 bg-white/[0.02] hover:bg-white/[0.05] flex flex-col items-center justify-center cursor-pointer transition-all group">
+                         <div className="w-12 h-12 rounded-full border border-white/20 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform bg-white/5">
+                           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/60 group-hover:text-white"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                         </div>
+                         <span className="text-sm font-bold text-white/60 group-hover:text-white">{isUploadingElement ? "Uploading..." : "New Element"}</span>
+                         <span className="text-xs text-white/30 mt-1">Character, prop, or location</span>
+                         <input type="file" accept="image/*" multiple className="hidden" onChange={handleFileUpload} disabled={isUploadingElement || !apiKey} />
+                       </label>
+                       {elements.filter(el => elementsFilter === "All" || el.type === elementsFilter).map(el => (
+                         <div key={el.id} className="aspect-[4/3] rounded-2xl bg-[#141414] border border-white/5 overflow-hidden flex flex-col group cursor-pointer hover:border-white/20 transition-colors relative" onClick={() => { handleElementSelect(el); setIsElementsModalOpen(false); }}>
+                           <div className="flex-1 overflow-hidden relative">
+                             {el.imageUrl ? <img src={el.imageUrl} alt={el.name} className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity group-hover:scale-105 duration-500" /> : <div className="w-full h-full flex items-center justify-center text-4xl bg-black/40">{el.icon}</div>}
+                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                             <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                               <button className="p-1.5 bg-black/50 hover:bg-red-500/80 rounded-lg text-white border border-white/10 backdrop-blur-md" onClick={(e) => { e.stopPropagation(); setElements(prev => prev.filter(item => item.id !== el.id)); }} title="Delete">
+                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                               </button>
+                             </div>
+                             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity w-full px-4">
+                               <button className="w-full py-1.5 bg-white/10 border border-white/20 rounded-full text-[10px] font-bold text-white backdrop-blur-md hover:bg-white/20">Use in shot</button>
+                             </div>
+                           </div>
+                           <div className="h-14 bg-[#111111] border-t border-white/5 p-3 flex flex-col justify-center">
+                             <span className="text-sm font-bold text-white truncate">@{el.handle || el.name.replace(/s+/g, '-').toLowerCase()}</span>
+                             <span className="text-[10px] text-white/40 font-medium uppercase tracking-widest">{el.type || 'Character'}</span>
+                           </div>
+                         </div>
+                       ))}
+                    </div>
+                  </div>
+                )}
+
+             </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

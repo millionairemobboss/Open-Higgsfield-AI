@@ -7,7 +7,7 @@ module.exports = {
         'app-bg': '#050505',
         'panel-bg': '#0a0a0a',
         'card-bg': '#111111',
-        primary: '#d9ff00',
+        primary: '#a855f7',
         secondary: '#a1a1aa',
         muted: '#52525b',
       },
